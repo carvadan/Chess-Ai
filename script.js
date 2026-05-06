@@ -1,166 +1,161 @@
 var board = null;
 var game = new Chess();
-var $status = $('#status');
+var $status = $('#status-text');
+var playerColor = Math.random() < 0.5 ? 'w' : 'b';
+var gameOver = false;
 
-// Таблицы ценности позиций (ИИ будет стремиться захватить центр)
-var reverseArray = function(array) { return array.slice().reverse(); };
-
+// --- POSITION EVALUATION ---
 var pawnEval = [
-    [0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0],
-    [5.0,  5.0,  5.0,  5.0,  5.0,  5.0,  5.0,  5.0],
-    [1.0,  1.0,  2.0,  3.0,  3.0,  2.0,  1.0,  1.0],
-    [0.5,  0.5,  1.0,  2.5,  2.5,  1.0,  0.5,  0.5],
-    [0.0,  0.0,  0.0,  2.0,  2.0,  0.0,  0.0,  0.0],
-    [0.5, -0.5, -1.0,  0.0,  0.0, -1.0, -0.5,  0.5],
-    [0.5,  1.0, 1.0,  -2.0, -2.0,  1.0,  1.0,  0.5],
-    [0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0]
+    [0, 0, 0, 0, 0, 0, 0, 0], [5, 5, 5, 5, 5, 5, 5, 5], [1, 1, 2, 3, 3, 2, 1, 1],
+    [0.5, 0.5, 1, 2.5, 2.5, 1, 0.5, 0.5], [0, 0, 0, 2, 2, 0, 0, 0],
+    [0.5, -0.5, -1, 0, 0, -1, -0.5, 0.5], [0.5, 1, 1, -2, -2, 1, 1, 0.5], [0, 0, 0, 0, 0, 0, 0, 0]
 ];
-
 var knightEval = [
-    [-5.0, -4.0, -3.0, -3.0, -3.0, -3.0, -4.0, -5.0],
-    [-4.0, -2.0,  0.0,  0.0,  0.0,  0.0, -2.0, -4.0],
-    [-3.0,  0.0,  1.0,  1.5,  1.5,  1.0,  0.0, -3.0],
-    [-3.0,  0.5,  1.5,  2.0,  2.0,  1.5,  0.5, -3.0],
-    [-3.0,  0.0,  1.5,  2.0,  2.0,  1.5,  0.0, -3.0],
-    [-3.0,  0.5,  1.0,  1.5,  1.5,  1.0,  0.5, -3.0],
-    [-4.0, -2.0,  0.0,  0.5,  0.5,  0.0, -2.0, -4.0],
-    [-5.0, -4.0, -3.0, -3.0, -3.0, -3.0, -4.0, -5.0]
+    [-5, -4, -3, -3, -3, -3, -4, -5], [-4, -2, 0, 0, 0, 0, -2, -4], [-3, 0, 1, 1.5, 1.5, 1, 0, -3],
+    [-3, 0.5, 1.5, 2, 2, 1.5, 0.5, -3], [-3, 0, 1.5, 2, 2, 1.5, 0, -3],
+    [-3, 0.5, 1, 1.5, 1.5, 1, 0.5, -3], [-4, -2, 0, 0.5, 0.5, 0, -2, -4], [-5, -4, -3, -3, -3, -3, -4, -5]
 ];
-
-// Оценка фигуры в зависимости от её типа и клетки
-function getPieceValue(piece, x, y) {
-    if (piece === null) return 0;
-    var getAbsoluteValue = function (piece, isWhite, x, y) {
-        if (piece.type === 'p') return 10 + (isWhite ? pawnEval[y][x] : reverseArray(pawnEval)[y][x]);
-        if (piece.type === 'r') return 50;
-        if (piece.type === 'n') return 30 + knightEval[y][x];
-        if (piece.type === 'b') return 30;
-        if (piece.type === 'q') return 90;
-        if (piece.type === 'k') return 900;
-        throw "Unknown piece type: " + piece.type;
-    };
-    var absoluteValue = getAbsoluteValue(piece, piece.color === 'w', x, y);
-    return piece.color === 'w' ? absoluteValue : -absoluteValue;
-}
 
 function evaluateBoard(game) {
-    var totalEvaluation = 0;
-    for (var i = 0; i < 8; i++) {
-        for (var j = 0; j < 8; j++) {
-            totalEvaluation = totalEvaluation + getPieceValue(game.board()[i][j], i, j);
-        }
-    }
-    return totalEvaluation;
+    const weights = { p: 10, n: 30, b: 30, r: 50, q: 90, k: 900 };
+    let totalEval = 0;
+    game.board().forEach((row, y) => {
+        row.forEach((piece, x) => {
+            if (piece) {
+                let val = weights[piece.type];
+                if (piece.type === 'p') val += piece.color === 'w' ? pawnEval[y][x] : pawnEval[7-y][x];
+                if (piece.type === 'n') val += knightEval[y][x];
+                totalEval += (piece.color === 'w' ? val : -val);
+            }
+        });
+    });
+    return totalEval;
 }
 
-// Алгоритм Минимакс с Альфа-Бета отсечением
-function minimax(depth, game, alpha, beta, isMaximisingPlayer) {
-    if (depth === 0) return -evaluateBoard(game);
-
-    var newGameMoves = game.moves();
-
-    if (isMaximisingPlayer) {
-        var bestEval = -9999;
-        for (var i = 0; i < newGameMoves.length; i++) {
-            game.move(newGameMoves[i]);
-            bestEval = Math.max(bestEval, minimax(depth - 1, game, alpha, beta, !isMaximisingPlayer));
+function minimax(depth, game, alpha, beta, isMax) {
+    if (depth === 0 || game.game_over()) return evaluateBoard(game);
+    let moves = game.moves();
+    if (isMax) {
+        let best = -9999;
+        for (let m of moves) {
+            game.move(m);
+            best = Math.max(best, minimax(depth - 1, game, alpha, beta, false));
             game.undo();
-            alpha = Math.max(alpha, bestEval);
-            if (beta <= alpha) return bestEval;
+            alpha = Math.max(alpha, best);
+            if (beta <= alpha) break;
         }
-        return bestEval;
+        return best;
     } else {
-        var bestEval = 9999;
-        for (var i = 0; i < newGameMoves.length; i++) {
-            game.move(newGameMoves[i]);
-            bestEval = Math.min(bestEval, minimax(depth - 1, game, alpha, beta, !isMaximisingPlayer));
+        let best = 9999;
+        for (let m of moves) {
+            game.move(m);
+            best = Math.min(best, minimax(depth - 1, game, alpha, beta, true));
             game.undo();
-            beta = Math.min(beta, bestEval);
-            if (beta <= alpha) return bestEval;
+            beta = Math.min(beta, best);
+            if (beta <= alpha) break;
         }
-        return bestEval;
+        return best;
     }
 }
 
-function makeBestMove() {
-    var possibleMoves = game.moves();
-    if (possibleMoves.length === 0) return;
+function makeAiMove() {
+    if (game.game_over() || gameOver) { updateStatus(); return; }
+    
+    let moves = game.moves();
+    let bestMove = null;
+    let bestVal = (game.turn() === 'w') ? -9999 : 9999;
 
-    var bestMove = null;
-    var bestValue = -9999;
-
-    // Глубина 3 — это "средний" уровень. 4 будет думать долго.
-    var depth = 3; 
-
-    for (var i = 0; i < possibleMoves.length; i++) {
-        var move = possibleMoves[i];
-        game.move(move);
-        var boardValue = minimax(depth - 1, game, -10000, 10000, false);
+    for (let m of moves) {
+        game.move(m);
+        let val = minimax(2, game, -10000, 10000, game.turn() === 'w');
         game.undo();
-        if (boardValue > bestValue) {
-            bestValue = boardValue;
-            bestMove = move;
+        if (game.turn() === 'w' ? val > bestVal : val < bestVal) {
+            bestVal = val;
+            bestMove = m;
         }
     }
-
     game.move(bestMove);
     board.position(game.fen());
     updateStatus();
 }
 
-// --- ВИЗУАЛЬНАЯ ЧАСТЬ И ПОДСВЕТКА ---
+// --- INTERACTION ---
+function onDragStart(source, piece) {
+    if (game.game_over() || gameOver) return false;
+    if (piece.charAt(0) !== game.turn()) return false;
+    if (piece.charAt(0) !== playerColor) return false;
 
-function removeGreySquares () {
-    $('#my_board .square-55d63').removeClass('highlight-white highlight-black');
+    game.moves({square: source, verbose: true}).forEach(m => {
+        $('#my_board .square-' + m.to).addClass('highlight-move');
+    });
 }
 
-function greySquare (square) {
-    var $square = $('#my_board .square-' + square);
-    var background = $square.hasClass('black-3c85d') ? 'highlight-black' : 'highlight-white';
-    $square.addClass(background);
-}
-
-function onDragStart (source, piece) {
-    if (game.game_over() || piece.search(/^b/) !== -1) return false;
-
-    var moves = game.moves({ square: source, verbose: true });
-    if (moves.length === 0) return;
-
-    greySquare(source);
-    for (var i = 0; i < moves.length; i++) {
-        greySquare(moves[i].to);
-    }
-}
-
-function onDrop (source, target) {
-    removeGreySquares();
-    var move = game.move({ from: source, to: target, promotion: 'q' });
+function onDrop(source, target) {
+    $('#my_board .square-55d63').removeClass('highlight-move');
+    let move = game.move({ from: source, to: target, promotion: 'q' });
     if (move === null) return 'snapback';
-
-    $status.html('ИИ обдумывает стратегию...');
-    window.setTimeout(makeBestMove, 250);
+    updateStatus();
+    setTimeout(makeAiMove, 300);
 }
-
-function onSnapEnd () { board.position(game.fen()); }
 
 function updateStatus() {
-    var status = '';
-    var moveColor = (game.turn() === 'b') ? 'Черных' : 'Белых';
-    if (game.in_checkmate()) status = 'Мат! Победили ' + (game.turn() === 'w' ? 'Черные' : 'Белые');
-    else if (game.in_draw()) status = 'Ничья!';
-    else {
-        status = 'Ваш ход (Белые)';
-        if (game.in_check()) status += ' - ШАХ!';
+    let msg = "";
+    if (game.in_checkmate()) {
+        msg = "Checkmate! " + (game.turn() === 'w' ? "Black" : "White") + " wins.";
+        endGame();
+    } else if (game.in_draw()) {
+        msg = "Draw!";
+        endGame();
+    } else if (gameOver) {
+        msg = "You resigned. AI wins!";
+    } else {
+        msg = (game.turn() === 'w' ? "White" : "Black") + " to move";
+        if (game.in_check()) msg += " (Check!)";
     }
-    $status.html(status);
+    $status.html(msg);
 }
 
+function endGame() {
+    gameOver = true;
+    $('#resign-btn').hide();
+    $('#rematch-btn').show();
+}
+
+// --- BUTTONS LOGIC ---
+$('#resign-btn').on('click', function() {
+    if (!game.game_over() && !gameOver) {
+        gameOver = true;
+        updateStatus();
+        endGame();
+    }
+});
+
+$('#rematch-btn').on('click', function() {
+    // Reset everything
+    game = new Chess();
+    gameOver = false;
+    playerColor = Math.random() < 0.5 ? 'w' : 'b';
+    
+    board.orientation(playerColor === 'w' ? 'white' : 'black');
+    board.start();
+    
+    $('#rematch-btn').hide();
+    $('#resign-btn').show();
+    
+    updateStatus();
+    if (playerColor === 'b') setTimeout(makeAiMove, 500);
+});
+
+// --- INITIALIZATION ---
 board = Chessboard('my_board', {
     draggable: true,
     position: 'start',
+    orientation: playerColor === 'w' ? 'white' : 'black',
     pieceTheme: 'img/chesspieces/wikipedia/{piece}.png',
     onDragStart: onDragStart,
     onDrop: onDrop,
-    onSnapEnd: onSnapEnd
+    onSnapEnd: () => board.position(game.fen())
 });
+
+if (playerColor === 'b') setTimeout(makeAiMove, 500);
 updateStatus();
